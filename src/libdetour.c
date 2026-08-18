@@ -21,8 +21,8 @@
 /* NOTE: Remember to change this if you move the header */
 #include "libdetour.h"
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h> /* memcpy() */
 
 /*----------------------------------------------------------------------------*/
@@ -38,46 +38,47 @@
  *   a:  ff e0                   jmp    rax
  */
 #ifdef __i386__
-static uint8_t jmp_bytes[] = { 0xB8, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xE0 };
+#define JMP_BYTES_INIT {0xB8, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xE0}
 #define JMP_BYTES_OFF 1 /* Offset inside the array where the ptr should go */
 #else
-static uint8_t jmp_bytes[] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
-                               0x00, 0x00, 0x00, 0x00, 0xFF, 0xE0 };
+#define JMP_BYTES_INIT                                                         \
+  {0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xE0}
 #define JMP_BYTES_OFF 2 /* Offset inside the array where the ptr should go */
 #endif
 
 /*----------------------------------------------------------------------------*/
 
 #if defined(__unix__)
-#include <unistd.h>   /* sysconf() */
 #include <sys/mman.h> /* mprotect() */
+#include <unistd.h>   /* sysconf() */
 
-static bool protect_addr(void* ptr, bool enable_write) {
-    /*
-     * For more information, see:
-     * https://8dcc.github.io/reversing/challenge10.html#c-translation
-     */
-    const long page_size      = sysconf(_SC_PAGESIZE);
-    const long page_mask      = ~(page_size - 1);
-    const uintptr_t next_page = ((uintptr_t)ptr + page_size - 1) & page_mask;
-    void* prev_page           = (void*)(next_page - page_size);
+static bool protect_addr(void *ptr, bool enable_write) {
+  /*
+   * For more information, see:
+   * https://8dcc.github.io/reversing/challenge10.html#c-translation
+   */
+  const long page_size = sysconf(_SC_PAGESIZE);
+  const long page_mask = ~(page_size - 1);
+  const uintptr_t next_page = ((uintptr_t)ptr + page_size - 1) & page_mask;
+  void *prev_page = (void *)(next_page - page_size);
 
-    uint32_t new_flags = PROT_READ | PROT_EXEC;
-    if (enable_write)
-        new_flags |= PROT_WRITE;
+  uint32_t new_flags = PROT_READ | PROT_EXEC;
+  if (enable_write) {
+    new_flags |= PROT_WRITE;
+  }
 
-    if (mprotect(prev_page, page_size, new_flags) == -1)
-        return false;
-
-    return true;
+  if (mprotect(prev_page, page_size, new_flags) == -1) {
+    return false;
+  }
+  return true;
 }
 #elif defined(_WIN32) /* !defined(__unix__) */
 #include <windows.h>  /* VirtualProtect() */
 
-static bool protect_addr(void* ptr, bool enable_write) {
-    DWORD old_flags;
-    DWORD new_flags = enable_write ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
-    return VirtualProtect(ptr, sizeof(jmp_bytes), new_flags, &old_flags);
+static bool protect_addr(void *ptr, bool enable_write) {
+  DWORD old_flags;
+  DWORD new_flags = enable_write ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
+  return VirtualProtect(ptr, sizeof(jmp_bytes), new_flags, &old_flags);
 }
 #else                 /* !defined(_WIN32) */
 #error "libdetour: This systems is not supported"
@@ -85,73 +86,81 @@ static bool protect_addr(void* ptr, bool enable_write) {
 
 /*----------------------------------------------------------------------------*/
 
-void detour_init(detour_ctx_t* ctx, void* orig, void* hook) {
-    ctx->detoured = false;
-    ctx->orig     = orig;
-    ctx->hook     = hook;
+void detour_init(detour_ctx_t *ctx, void *orig, void *hook) {
+  ctx->detoured = false;
+  ctx->orig = orig;
+  ctx->hook = hook;
 
-    /*
-     * Store the first N bytes of the original function, where N is the size of
-     * the `jmp' instructions.
-     */
-    memcpy(ctx->saved_bytes, orig, sizeof(ctx->saved_bytes));
+  /*
+   * Store the first N bytes of the original function, where N is the size of
+   * the `jmp' instructions.
+   */
+  memcpy(ctx->saved_bytes, orig, sizeof(ctx->saved_bytes));
 }
 
-bool detour_enable(detour_ctx_t* ctx) {
-    if (ctx->detoured)
-        return true;
-
-    /*
-     * Enable write permissions on the specified address. The `protect_addr'
-     * function is defined above as a static function, depending on the current
-     * OS.
-     */
-    if (!protect_addr(ctx->orig, true))
-        return false;
-
-    /*
-     * Write the address of the `hook' function to the array for the encoded
-     * `jmp' instruction, at the `JMP_BYTES_OFF' offset (which changes depending
-     * on the architecture at compile-time).
-     */
-    memcpy(&jmp_bytes[JMP_BYTES_OFF], &(ctx->hook), sizeof(void*));
-
-    /*
-     * Copy the whole (now filled) `jmp_bytes' array to the start of the body
-     * the target function (`ctx->orig'). This new `jmp' instruction will be
-     * responsible for the actual hook.
-     */
-    memcpy(ctx->orig, jmp_bytes, sizeof(jmp_bytes));
-
-    /*
-     * Restore the old protection for this address.
-     */
-    if (!protect_addr(ctx->orig, false))
-        return false;
-
-    ctx->detoured = true;
+bool detour_enable(detour_ctx_t *ctx) {
+  if (ctx->detoured) {
     return true;
+  }
+
+  /*
+   * Enable write permissions on the specified address. The `protect_addr'
+   * function is defined above as a static function, depending on the current
+   * OS.
+   */
+  if (!protect_addr(ctx->orig, true)) {
+    return false;
+  }
+
+  uint8_t jmp_bytes[] = JMP_BYTES_INIT;
+
+  /*
+   * Write the address of the `hook' function to the array for the encoded
+   * `jmp' instruction, at the `JMP_BYTES_OFF' offset (which changes depending
+   * on the architecture at compile-time).
+   */
+  memcpy(&jmp_bytes[JMP_BYTES_OFF], &(ctx->hook), sizeof(void *));
+
+  /*
+   * Copy the whole (now filled) `jmp_bytes' array to the start of the body
+   * the target function (`ctx->orig'). This new `jmp' instruction will be
+   * responsible for the actual hook.
+   */
+  memcpy(ctx->orig, jmp_bytes, sizeof(jmp_bytes));
+
+  /*
+   * Restore the old protection for this address.
+   */
+  if (!protect_addr(ctx->orig, false)) {
+    return false;
+  }
+
+  ctx->detoured = true;
+  return true;
 }
 
-bool detour_disable(detour_ctx_t* ctx) {
-    if (!ctx->detoured)
-        return true;
-
-    /*
-     * See `detour_enable'.
-     */
-    if (!protect_addr(ctx->orig, true))
-        return false;
-
-    /*
-     * Restore the bytes we saved inside the `detour_ctx_t' structure in
-     * `detour_init'.
-     */
-    memcpy(ctx->orig, ctx->saved_bytes, sizeof(ctx->saved_bytes));
-
-    if (!protect_addr(ctx->orig, false))
-        return false;
-
-    ctx->detoured = false;
+bool detour_disable(detour_ctx_t *ctx) {
+  if (!ctx->detoured) {
     return true;
+  }
+
+  /*
+   * See `detour_enable'.
+   */
+  if (!protect_addr(ctx->orig, true)) {
+    return false;
+  }
+
+  /*
+   * Restore the bytes we saved inside the `detour_ctx_t' structure in
+   * `detour_init'.
+   */
+  memcpy(ctx->orig, ctx->saved_bytes, sizeof(ctx->saved_bytes));
+
+  if (!protect_addr(ctx->orig, false)) {
+    return false;
+  }
+
+  ctx->detoured = false;
+  return true;
 }
